@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # تسمح بالتشغيل اليدوي
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,7 +18,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.9'  # تغيير إلى 3.9 للتوافق
         cache: 'pip'
         
     - name: Cache Buildozer dependencies
@@ -28,7 +28,7 @@ jobs:
           ~/.buildozer
           ~/.cache/pip
           ~/.local/share/buildozer
-        key: ${{ runner.os }}-buildozer-${{ hashFiles('**/buildozer.spec') }}
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
         restore-keys: |
           ${{ runner.os }}-buildozer-
           
@@ -41,6 +41,7 @@ jobs:
           unzip \
           openjdk-17-jdk \
           python3-pip \
+          python3-dev \
           autoconf \
           libtool \
           pkg-config \
@@ -53,68 +54,113 @@ jobs:
           libssl-dev \
           wget \
           curl \
-          dos2unix
+          dos2unix \
+          build-essential \
+          libgl1-mesa-dev \
+          libgles2-mesa-dev \
+          libdrm-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libsdl2-dev \
+          libsdl2-image-dev \
+          libsdl2-mixer-dev \
+          libsdl2-ttf-dev
           
+    - name: Install Android SDK cmdline tools
+      run: |
+        mkdir -p $HOME/android/cmdline-tools
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-9477386_latest.zip -d $HOME/android/cmdline-tools
+        mv $HOME/android/cmdline-tools/cmdline-tools $HOME/android/cmdline-tools/latest
+        echo "ANDROID_HOME=$HOME/android" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android/cmdline-tools/latest/bin:$HOME/android/platform-tools" >> $GITHUB_ENV
+        
     - name: Install Cython and Buildozer
       run: |
-        pip install --upgrade pip
-        pip install cython==0.29.36
-        pip install buildozer
+        pip install --upgrade pip setuptools wheel
+        pip install cython==0.29.33  # إصدار مستقر
+        pip install buildozer==1.5.0  # إصدار محدد
         
     - name: Initialize buildozer if spec not exists
       run: |
         if [ ! -f buildozer.spec ]; then
           echo "buildozer.spec not found, creating default..."
           buildozer init
-          # تحديث اسم التطبيق إذا كان موجوداً في متغيرات البيئة
-          if [ -n "${{ secrets.APP_NAME }}" ]; then
-            sed -i "s/^title = .*/title = ${{ secrets.APP_NAME }}/" buildozer.spec
-            sed -i "s/^package.name = .*/package.name = ${{ secrets.APP_NAME }}/" buildozer.spec
-          fi
-          # تحديث package.domain إذا كان موجوداً
-          if [ -n "${{ secrets.PACKAGE_DOMAIN }}" ]; then
-            sed -i "s/^package.domain = .*/package.domain = ${{ secrets.PACKAGE_DOMAIN }}/" buildozer.spec
-          fi
+          # تحديث الإعدادات الأساسية
+          sed -i 's/^title = .*/title = MyKivyApp/' buildozer.spec
+          sed -i 's/^package.name = .*/package.name = mykivyapp/' buildozer.spec
+          sed -i 's/^package.domain = .*/package.domain = org.example/' buildozer.spec
         else
           echo "buildozer.spec already exists"
         fi
         
     - name: Accept Android SDK licenses
       run: |
+        mkdir -p $ANDROID_HOME/licenses
         mkdir -p ~/.android
         touch ~/.android/repositories.cfg
-        yes | sdkmanager --licenses || true
-        # طريقة بديلة لقبول التراخيص
-        mkdir -p $ANDROID_HOME/licenses
-        echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > $ANDROID_HOME/licenses/android-sdk-license
-        echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" >> $ANDROID_HOME/licenses/android-sdk-license
         
-    - name: Set environment variables
+        # قبول التراخيص
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
+        echo "8933bad161af4178b1185d1a37fbf41ea5269c55" >> $ANDROID_HOME/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+        echo "d975f751698a77b662f1254ddbeed3901e976f5a" > $ANDROID_HOME/licenses/intel-android-extra-license
+        
+        # تأكيد القبول عبر sdkmanager
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        
+    - name: Install required Android SDK components
       run: |
-        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/.buildozer/android/platform/android-sdk/tools:$HOME/.buildozer/android/platform/android-sdk/tools/bin" >> $GITHUB_ENV
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-31" "build-tools;31.0.0" --sdk_root=$ANDROID_HOME
+        
+    - name: Set Java environment
+      run: |
         echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
         
-    - name: Build APK with timeout handling
+    - name: Build APK with retry mechanism
       run: |
-        # استخدام script لتجنب مشكلة Broken pipe
-        {
-          buildozer -v android debug
-        } || {
-          echo "Build interrupted, retrying with clean..."
-          buildozer android clean
-          buildozer -v android debug
-        }
-      timeout-minutes: 60
+        # محاولة البناء مع إعادة المحاولة التلقائية
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          echo "Build attempt $((retry_count+1)) of $max_retries"
+          
+          # تنظيف قبل المحاولة
+          if [ $retry_count -gt 0 ]; then
+            echo "Cleaning before retry..."
+            buildozer android clean
+            rm -rf ~/.buildozer/android/platform/build-*
+          fi
+          
+          # محاولة البناء
+          if buildozer -v android debug; then
+            echo "Build successful!"
+            break
+          else
+            retry_count=$((retry_count+1))
+            if [ $retry_count -eq $max_retries ]; then
+              echo "Build failed after $max_retries attempts"
+              exit 1
+            fi
+            echo "Build failed, retrying in 10 seconds..."
+            sleep 10
+          fi
+        done
       env:
         BUILDOZER_NO_TERMINAL: 1
         PYTHONUNBUFFERED: 1
+        BUILDOZER_DISABLE_COLORS: 1
         
     - name: Check build output
       run: |
-        echo "Checking for APK files..."
-        find . -name "*.apk" -type f || echo "No APK found yet"
+        echo "Searching for APK files..."
+        find . -name "*.apk" -type f | while read apk; do
+          echo "Found APK: $apk"
+          ls -la "$apk"
+        done
         
     - name: Upload APK artifacts
       uses: actions/upload-artifact@v4
@@ -124,40 +170,23 @@ jobs:
           **/*.apk
           !**/*-unsigned.apk
           !**/*-debug-unaligned.apk
-        if-no-files-found: warn
+        if-no-files-found: error  # تغيير إلى error للكشف المبكر
         retention-days: 30
         
-    - name: Upload debug symbols if available
-      if: success()
+    - name: Upload build logs on failure
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: debug-symbols
-        path: ~/.buildozer/android/platform/build-*/dists/**/obj/local/
+        name: build-logs
+        path: |
+          ~/.buildozer/android/platform/build-*/logs/
+          ~/.buildozer/android/platform/build-*/*.log
+          *.log
         if-no-files-found: ignore
         
-    - name: Cleanup old builds
+    - name: Cleanup
       if: always()
       run: |
-        # تنظيف لتحرير المساحة مع الاحتفاظ بالـ cache
+        echo "Cleaning up temporary files..."
+        rm -f commandlinetools-linux-*.zip
         buildozer android clean || true
-        rm -rf ~/.buildozer/android/platform/build-*/.gradle || true
-        
-  release:
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Download APK artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: kivy-android-apk
-        path: ./apk
-        
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./apk/**/*.apk
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
