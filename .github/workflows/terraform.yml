@@ -1,16 +1,29 @@
-name: ABU_NJM_FINAL_SUCCESS
+name: ABU_NJM_PURE_BUILD
 on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Buildozer
+        run: |
+          sudo apt update
+          sudo apt install -y python3-pip build-essential git python3 python3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev openjdk-17-jdk
+          pip3 install --user --upgrade buildozer cython
+
       - name: Build APK
-        uses: ArtemSerebriakov/buildozer-action@v1
-        with:
-          command: android debug
-      - name: Upload APK
+        run: |
+          export PATH=$PATH:$HOME/.local/bin
+          # إذا ملف الإعدادات مو موجود يسويه تلقائياً
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+          fi
+          # تشغيل الصهر وقبول الشروط
+          yes | buildozer android debug
+
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: MY-APP-FINAL
+          name: ABU-NJM-APP
           path: bin/*.apk
