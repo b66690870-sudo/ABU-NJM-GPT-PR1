@@ -1,0 +1,16 @@
+name: ABU-NJM-BUILDER
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build APK
+        uses: ArtemSerebriakov/buildozer-action@v1
+        with:
+          command: android debug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MY-APP-APK
+          path: bin/*.apk
