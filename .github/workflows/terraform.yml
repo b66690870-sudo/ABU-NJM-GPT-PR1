@@ -1,30 +1,30 @@
-name: ABU_NJM_FINAL_WAY
+name: ABU_NJM_FORCE_BUILD
 on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install System Dependencies
+      - name: Install Buildozer and Dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-          pip3 install --user --upgrade buildozer
+          sudo apt install -y python3-pip build-essential git python3 python3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev openjdk-17-jdk
+          pip3 install --user --upgrade buildozer cython
 
-      - name: Build APK with Buildozer
+      - name: Initialize and Build APK
         run: |
           export PATH=$PATH:$HOME/.local/bin
-          buildozer android debug || true
+          # إذا ملف spec مو موجود، السيرفر يسويه ويعدل اسم التطبيق
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+            sed -i 's/package.name = myapp/package.name = ABU_NJM_APP/' buildozer.spec
+          fi
+          # صهر التطبيق مع قبول الشروط تلقائياً
+          yes | buildozer android debug
 
-      - name: Upload APK Result
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ABU-NJM-PACKAGE
+          name: ABU-NJM-FINAL-APK
           path: bin/*.apk
-
