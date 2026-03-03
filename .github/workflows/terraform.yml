@@ -1,4 +1,4 @@
-name: ABU-NJM-SUCCESS
+name: ABU-NJM-BUILD
 on: [push, workflow_dispatch]
 jobs:
   build:
@@ -6,12 +6,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build with Buildozer
-        uses: ArtemSerebriakov/buildozer-action@v1.6.1
+        uses: ArtemSerebriakov/buildozer-action@v1
         with:
           command: android debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ABU-NJM-APP
+          name: MY-APP-FINAL
           path: bin/*.apk
 concurrency:
