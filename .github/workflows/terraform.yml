@@ -14,4 +14,3 @@ jobs:
         with:
           name: MY-APP-APK
           path: bin/*.apk
-concurrency: 
