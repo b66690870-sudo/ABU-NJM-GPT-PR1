@@ -1,29 +1,163 @@
-name: ABU_NJM_PURE_BUILD
-on: [push, workflow_dispatch]
+name: Build Kivy APK with Buildozer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # تسمح بالتشغيل اليدوي
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Buildozer
-        run: |
-          sudo apt update
-          sudo apt install -y python3-pip build-essential git python3 python3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev openjdk-17-jdk
-          pip3 install --user --upgrade buildozer cython
-
-      - name: Build APK
-        run: |
-          export PATH=$PATH:$HOME/.local/bin
-          # إذا ملف الإعدادات مو موجود يسويه تلقائياً
-          if [ ! -f buildozer.spec ]; then
-            buildozer init
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Cache Buildozer dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.buildozer
+          ~/.cache/pip
+          ~/.local/share/buildozer
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('**/buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
+          
+    - name: Install system dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git \
+          zip \
+          unzip \
+          openjdk-17-jdk \
+          python3-pip \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          wget \
+          curl \
+          dos2unix
+          
+    - name: Install Cython and Buildozer
+      run: |
+        pip install --upgrade pip
+        pip install cython==0.29.36
+        pip install buildozer
+        
+    - name: Initialize buildozer if spec not exists
+      run: |
+        if [ ! -f buildozer.spec ]; then
+          echo "buildozer.spec not found, creating default..."
+          buildozer init
+          # تحديث اسم التطبيق إذا كان موجوداً في متغيرات البيئة
+          if [ -n "${{ secrets.APP_NAME }}" ]; then
+            sed -i "s/^title = .*/title = ${{ secrets.APP_NAME }}/" buildozer.spec
+            sed -i "s/^package.name = .*/package.name = ${{ secrets.APP_NAME }}/" buildozer.spec
           fi
-          # تشغيل الصهر وقبول الشروط
-          yes | buildozer android debug
-
-      - name: Upload Result
-        uses: actions/upload-artifact@v4
-        with:
-          name: ABU-NJM-APP
-          path: bin/*.apk
+          # تحديث package.domain إذا كان موجوداً
+          if [ -n "${{ secrets.PACKAGE_DOMAIN }}" ]; then
+            sed -i "s/^package.domain = .*/package.domain = ${{ secrets.PACKAGE_DOMAIN }}/" buildozer.spec
+          fi
+        else
+          echo "buildozer.spec already exists"
+        fi
+        
+    - name: Accept Android SDK licenses
+      run: |
+        mkdir -p ~/.android
+        touch ~/.android/repositories.cfg
+        yes | sdkmanager --licenses || true
+        # طريقة بديلة لقبول التراخيص
+        mkdir -p $ANDROID_HOME/licenses
+        echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > $ANDROID_HOME/licenses/android-sdk-license
+        echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" >> $ANDROID_HOME/licenses/android-sdk-license
+        
+    - name: Set environment variables
+      run: |
+        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/.buildozer/android/platform/android-sdk/tools:$HOME/.buildozer/android/platform/android-sdk/tools/bin" >> $GITHUB_ENV
+        echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+        
+    - name: Build APK with timeout handling
+      run: |
+        # استخدام script لتجنب مشكلة Broken pipe
+        {
+          buildozer -v android debug
+        } || {
+          echo "Build interrupted, retrying with clean..."
+          buildozer android clean
+          buildozer -v android debug
+        }
+      timeout-minutes: 60
+      env:
+        BUILDOZER_NO_TERMINAL: 1
+        PYTHONUNBUFFERED: 1
+        
+    - name: Check build output
+      run: |
+        echo "Checking for APK files..."
+        find . -name "*.apk" -type f || echo "No APK found yet"
+        
+    - name: Upload APK artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kivy-android-apk
+        path: |
+          **/*.apk
+          !**/*-unsigned.apk
+          !**/*-debug-unaligned.apk
+        if-no-files-found: warn
+        retention-days: 30
+        
+    - name: Upload debug symbols if available
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-symbols
+        path: ~/.buildozer/android/platform/build-*/dists/**/obj/local/
+        if-no-files-found: ignore
+        
+    - name: Cleanup old builds
+      if: always()
+      run: |
+        # تنظيف لتحرير المساحة مع الاحتفاظ بالـ cache
+        buildozer android clean || true
+        rm -rf ~/.buildozer/android/platform/build-*/.gradle || true
+        
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download APK artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: kivy-android-apk
+        path: ./apk
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ./apk/**/*.apk
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
