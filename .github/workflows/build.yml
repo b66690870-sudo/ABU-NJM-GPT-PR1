@@ -12,5 +12,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ABU-NJM-PACKAGE
+          name: ABU-NJM-APP
           path: bin/*.apk
